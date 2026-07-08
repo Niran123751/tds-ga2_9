@@ -10,42 +10,53 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-# ----------------------------
+# -----------------------------
 # CORS
-# ----------------------------
+# -----------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
-# ----------------------------
-# Fixed catalog (IDs 1..56)
-# ----------------------------
+
+# -----------------------------
+# Constants
+# -----------------------------
+TOTAL_ORDERS = 56
+RATE_LIMIT = 18
+WINDOW = 10
+
+# -----------------------------
+# Fixed catalog
+# -----------------------------
 orders_catalog = [
     {"id": i, "item": f"Order {i}"}
     for i in range(1, TOTAL_ORDERS + 1)
 ]
 
-# ----------------------------
-# In-memory stores
-# ----------------------------
+# -----------------------------
+# Stores
+# -----------------------------
 idempotency_store = {}
 client_requests = defaultdict(list)
 
-# ----------------------------
-# Rate limiting middleware
-# ----------------------------
+# -----------------------------
+# Root
+# -----------------------------
+@app.get("/")
+def root():
+    return {"status": "Orders API Running"}
+
+# -----------------------------
+# Rate Limiter
+# -----------------------------
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
 
-    # Never rate-limit preflight
+    # Allow CORS preflight
     if request.method == "OPTIONS":
-        return await call_next(request)
-
-    # Only rate-limit the endpoints the grader is exercising
-    if request.url.path != "/orders":
         return await call_next(request)
 
     client = request.headers.get("X-Client-Id", "anonymous")
@@ -57,57 +68,53 @@ async def rate_limit(request: Request, call_next):
     ]
 
     if len(client_requests[client]) >= RATE_LIMIT:
-        retry_after = max(
+        retry = max(
             1,
             int(WINDOW - (now - client_requests[client][0]))
         )
 
         return JSONResponse(
             status_code=429,
+            headers={"Retry-After": str(retry)},
             content={"detail": "Too Many Requests"},
-            headers={"Retry-After": str(retry_after)},
         )
 
     client_requests[client].append(now)
 
     return await call_next(request)
-# ----------------------------
-# Root
-# ----------------------------
-@app.get("/")
-def root():
-    return {"message": "Orders API Running"}
 
-# ----------------------------
+# -----------------------------
 # POST /orders
-# ----------------------------
+# -----------------------------
 @app.post("/orders", status_code=201)
 def create_order(
     response: Response,
     body: Dict[str, Any] = Body(default={}),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ):
-    # Existing idempotency key
+
     if idempotency_key in idempotency_store:
         response.status_code = 200
         return idempotency_store[idempotency_key]
 
     order = {
         "id": str(uuid.uuid4()),
-        **body,
+        **body
     }
 
     idempotency_store[idempotency_key] = order
+
     return order
 
-# ----------------------------
+# -----------------------------
 # GET /orders
-# ----------------------------
+# -----------------------------
 @app.get("/orders")
 def list_orders(
-    limit: int = Query(default=10, ge=1),
-    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(10, ge=1),
+    cursor: Optional[str] = None,
 ):
+
     start = 0
 
     if cursor:
@@ -121,10 +128,13 @@ def list_orders(
     items = orders_catalog[start:end]
 
     next_cursor = None
+
     if end < TOTAL_ORDERS:
-        next_cursor = base64.b64encode(str(end).encode()).decode()
+        next_cursor = base64.b64encode(
+            str(end).encode()
+        ).decode()
 
     return {
         "items": items,
-        "next_cursor": next_cursor,
+        "next_cursor": next_cursor
     }
