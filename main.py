@@ -84,29 +84,26 @@ async def rate_limit(request: Request, call_next):
 # -----------------------------
 # POST /orders
 # -----------------------------
-@app.post("/orders")
+from typing import Any, Dict
+from fastapi import Body
+
+@app.post("/orders", status_code=201)
 def create_order(
-    order: OrderCreate,
     response: Response,
+    body: Dict[str, Any] = Body(default={}),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ):
-
-    # Same key -> same response
     if idempotency_key in idempotency_store:
         response.status_code = 200
         return idempotency_store[idempotency_key]
 
-    created = {
+    order = {
         "id": str(uuid.uuid4()),
-        "item": order.item
+        **body
     }
 
-    idempotency_store[idempotency_key] = created
-
-    response.status_code = 201
-    return created
-
-
+    idempotency_store[idempotency_key] = order
+    return order
 # -----------------------------
 # GET /orders
 # -----------------------------
